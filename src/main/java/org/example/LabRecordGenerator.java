@@ -27,9 +27,18 @@ public class LabRecordGenerator extends JFrame {
     private JButton btnGenerate, btnAddExp, btnEditExp, btnDeleteExp, btnSelectLogo;
     private String logoPath = "";
 
-    // Database Configuration
-    private static final String DB_URL = "jdbc:sqlite:lab_record.db";
-    private static final String PROP_FILE = "student_config.properties";
+    private static final String APP_DIR = System.getProperty("user.home") + File.separator + "LabRecordGenerator";
+
+    static {
+        File dir = new File(APP_DIR);
+        if (!dir.exists()) {
+            dir.mkdirs(); // Create the directory if it doesn't exist
+        }
+    }
+
+    // --- MODIFIED: Database Configuration to use Safe Directory ---
+    private static final String DB_URL = "jdbc:sqlite:" + APP_DIR + File.separator + "lab_record.db";
+    private static final String PROP_FILE = APP_DIR + File.separator + "student_config.properties";
 
     // --- LATEX STYLE COLORS ---
     // Matches: \definecolor{codegreen}{rgb}{0,0.6,0}
@@ -169,7 +178,8 @@ public class LabRecordGenerator extends JFrame {
     private void generatePdfFile() {
         // Increased left and right margins to 70
         Document doc = new Document(PageSize.A4, 70, 70, 50, 50);
-        String fileName = "Lab_Record_" + tfRegNo.getText() + ".pdf";
+        String desktopPath = System.getProperty("user.home") + File.separator + "Desktop";
+        String fileName = desktopPath + File.separator + "Lab_Record_" + tfRegNo.getText() + ".pdf";
 
         try {
             PdfWriter writer = PdfWriter.getInstance(doc, new FileOutputStream(fileName));
