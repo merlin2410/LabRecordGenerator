@@ -1,0 +1,16 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="LabRecord:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/LabRecord_jar</output-path>
+    <root id="archive" name="LabRecord.jar">
+      <element id="module-output" name="LabRecord" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/org/bouncycastle/bctsp-jdk14/1.38/bctsp-jdk14-1.38.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/bouncycastle/bcmail-jdk14/138/bcmail-jdk14-138.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/org/bouncycastle/bcmail-jdk14/1.38/bcmail-jdk14-1.38.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/com/lowagie/itext/2.1.7/itext-2.1.7.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/bouncycastle/bcprov-jdk14/138/bcprov-jdk14-138.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/org/bouncycastle/bcprov-jdk14/1.38/bcprov-jdk14-1.38.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/com/formdev/flatlaf/3.1.1/flatlaf-3.1.1.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/org/xerial/sqlite-jdbc/3.50.3.0/sqlite-jdbc-3.50.3.0.jar" path-in-jar="/" />
+    </root>
+  </artifact>
+</component>
