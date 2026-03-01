@@ -120,7 +120,7 @@ public class LabRecordGenerator extends JFrame {
         btnGenerate = new JButton("Generate PDF Record");
 
         btnGenerate.setBackground(new Color(46, 204, 113));
-        btnGenerate.setForeground(Color.BLACK);
+        btnGenerate.setForeground(Color.WHITE);
 
         pnlBottom.add(btnAddExp);
         pnlBottom.add(btnEditExp);
@@ -199,7 +199,15 @@ public class LabRecordGenerator extends JFrame {
     // ==========================================
     private void initDatabase() {
         try {
-            conn = DriverManager.getConnection("jdbc:sqlite:lab_records.db");
+            // Create a dedicated hidden folder in the user's home directory
+            String userHome = System.getProperty("user.home");
+            File appDir = new File(userHome, ".lab_record_app");
+            if (!appDir.exists()) {
+                appDir.mkdirs(); // Create the directory if it doesn't exist
+            }
+            String dbPath = appDir.getAbsolutePath() + File.separator + "lab_records.db";
+
+            conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
             Statement stmt = conn.createStatement();
 
             // Experiments table (updated to support all fields)
@@ -755,7 +763,7 @@ public class LabRecordGenerator extends JFrame {
 
         addInfoRow(infoTable, "Name:", tfName.getText(), fontReg);
         addInfoRow(infoTable, "Reg No:", tfRegNo.getText(), fontReg);
-        addInfoRow(infoTable, "Semester:", "Fourth Semester B.Tech (Electrical and Computer Engineering)", fontReg);
+        addInfoRow(infoTable, "Semester:", "Fourth Semester B.Tech (ECE)", fontReg);
         addInfoRow(infoTable, "Year:", tfYear.getText(), fontReg);
 
         PdfPCell infoContainer = new PdfPCell(infoTable);
