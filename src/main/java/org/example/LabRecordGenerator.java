@@ -6,176 +6,575 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
+import java.nio.file.Files;
 import java.sql.*;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Properties;
+import java.util.Date;
+import java.util.List;
 import java.util.regex.*;
 
 // OpenPDF Imports
-import com.lowagie.text.*;
+import com.lowagie.text.Chunk;
+import com.lowagie.text.Document;
+import com.lowagie.text.DocumentException;
+import com.lowagie.text.Element;
 import com.lowagie.text.Font;
+import com.lowagie.text.FontFactory;
 import com.lowagie.text.Image;
-import com.lowagie.text.pdf.*;
+import com.lowagie.text.PageSize;
+import com.lowagie.text.Paragraph;
+import com.lowagie.text.Phrase;
 import com.lowagie.text.Rectangle;
+import com.lowagie.text.pdf.ColumnText;
+import com.lowagie.text.pdf.PdfContentByte;
+import com.lowagie.text.pdf.PdfPCell;
+import com.lowagie.text.pdf.PdfPTable;
+import com.lowagie.text.pdf.PdfPageEventHelper;
+import com.lowagie.text.pdf.PdfWriter;
+import com.lowagie.text.pdf.draw.LineSeparator;
 
 public class LabRecordGenerator extends JFrame {
-    // UI Components
+
+    // --- UI Components ---
     private JTextField tfName, tfRegNo, tfYear;
     private JLabel lblLogoStatus;
     private JTable table;
     private DefaultTableModel tableModel;
-    private JButton btnGenerate, btnAddExp, btnEditExp, btnDeleteExp, btnSelectLogo;
+    private JButton btnGenerate, btnAddExp, btnEditExp, btnDeleteExp, btnSelectLogo, btnImportLocal;
     private String logoPath = "";
 
-    private static final String APP_DIR = System.getProperty("user.home") + File.separator + "LabRecordGenerator";
+    // --- Database connection ---
+    private Connection conn;
 
-    static {
-        File dir = new File(APP_DIR);
-        if (!dir.exists()) {
-            dir.mkdirs(); // Create the directory if it doesn't exist
-        }
-    }
-
-    // --- MODIFIED: Database Configuration to use Safe Directory ---
-    private static final String DB_URL = "jdbc:sqlite:" + APP_DIR + File.separator + "lab_record.db";
-    private static final String PROP_FILE = APP_DIR + File.separator + "student_config.properties";
-
-    // --- LATEX STYLE COLORS ---
-    // Matches: \definecolor{codegreen}{rgb}{0,0.6,0}
-    private static final Color COL_KEYWORD = new Color(148, 0, 211); // Purple-ish for keywords
-    private static final Color COL_COMMENT = new Color(0, 153, 0);   // Green
-    private static final Color COL_STRING = new Color(0, 0, 255);    // Blue
-
-    // Matches: \definecolor{backcolour}{rgb}{0.95,0.95,0.92}
-    private static final Color COL_CODE_BG = new Color(242, 242, 235);
-    // Matches: colback=black!5 (approx)
-    private static final Color COL_OUTPUT_BG = new Color(245, 245, 245);
-
+    // --- Syntax Highlighting Constants ---
+    private static final Color COL_KEYWORD = new Color(0, 0, 255);
+    private static final Color COL_STRING = new Color(163, 21, 21);
+    private static final Color COL_COMMENT = new Color(0, 128, 0);
+    private static final Color COL_CODE_BG = new Color(245, 245, 245);
+    private static final Color COL_OUTPUT_BG = new Color(240, 240, 240);
     private static final Pattern JAVA_PATTERN = Pattern.compile(
-            "//.*|/\\*[\\s\\S]*?\\*/" +
-                    "|\"(?:\\\\[^\"]|[^\"\\\\])*\"" +
-                    "|\\b(abstract|assert|boolean|break|byte|case|catch|char|class|const|continue|default|do|double|else|enum|extends|final|finally|float|for|goto|if|implements|import|instanceof|int|interface|long|native|new|package|private|protected|public|return|short|static|strictfp|super|switch|synchronized|this|throw|throws|transient|try|void|volatile|while|true|false|null)\\b"
+            "\\b(public|private|protected|class|static|void|int|double|float|char|boolean|if|else|for|while|return|new|import|package|try|catch|throws|throw|extends|implements|interface|byte|short|long|switch|case|default|break|continue|final)\\b|\".*?\"|//.*|/\\*[\\s\\S]*?\\*/"
     );
 
-    // Data Structure
+    // --- POJO for PDF Generation ---
     static class Experiment {
         int id;
         String no, name, date, aim, code, input, output, outputImagePath;
 
         public Experiment(int id, String no, String name, String date, String aim, String code, String input, String output, String outputImagePath) {
-            this.id = id;
-            this.no = no;
-            this.name = name;
-            this.date = date;
-            this.aim = aim;
-            this.code = code;
-            this.input = input;
-            this.output = output;
-            this.outputImagePath = outputImagePath;
+            this.id = id; this.no = no; this.name = name; this.date = date; this.aim = aim;
+            this.code = code; this.input = input; this.output = output; this.outputImagePath = outputImagePath;
         }
     }
 
-    private ArrayList<Experiment> experiments = new ArrayList<>();
-
     public LabRecordGenerator() {
-        setTitle("CET Lab Record Generator (Pro LaTeX Style)");
-        setSize(950, 750);
+        // --- GUI SETUP ---
+        setTitle("Lab Record Generator - Ultimate Edition");
+        setSize(1000, 650);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setLayout(new BorderLayout());
+        setLayout(new BorderLayout(10, 10));
 
-        initDatabase();
+        // --- TOP PANEL (Student Details) ---
+        JPanel pnlTop = new JPanel(new GridLayout(2, 4, 10, 10));
+        pnlTop.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-        // --- TOP PANEL ---
-        JPanel pnlTop = new JPanel(new GridBagLayout());
-        pnlTop.setBorder(BorderFactory.createTitledBorder("Student Details"));
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(5, 5, 5, 5);
-        gbc.fill = GridBagConstraints.HORIZONTAL;
+        pnlTop.add(new JLabel("Student Name:"));
+        tfName = new JTextField();
+        pnlTop.add(tfName);
 
-        // Name
-        gbc.gridx = 0; gbc.gridy = 0; pnlTop.add(new JLabel("Name:"), gbc);
-        gbc.gridx = 1; gbc.gridy = 0; gbc.weightx = 1.0; tfName = new JTextField(); pnlTop.add(tfName, gbc);
+        pnlTop.add(new JLabel("Register No:"));
+        tfRegNo = new JTextField();
+        pnlTop.add(tfRegNo);
 
-        // Reg No
-        gbc.gridx = 0; gbc.gridy = 1; gbc.weightx = 0; pnlTop.add(new JLabel("Register No:"), gbc);
-        gbc.gridx = 1; gbc.gridy = 1; gbc.weightx = 1.0; tfRegNo = new JTextField(); pnlTop.add(tfRegNo, gbc);
+        pnlTop.add(new JLabel("Year/Sem:"));
+        tfYear = new JTextField();
+        pnlTop.add(tfYear);
 
-        // Year
-        gbc.gridx = 0; gbc.gridy = 2; gbc.weightx = 0; pnlTop.add(new JLabel("Academic Year:"), gbc);
-        gbc.gridx = 1; gbc.gridy = 2; gbc.weightx = 1.0; tfYear = new JTextField(); pnlTop.add(tfYear, gbc);
-
-        // Logo Selection
-        gbc.gridx = 0; gbc.gridy = 3; gbc.weightx = 0; pnlTop.add(new JLabel("College Logo:"), gbc);
-        JPanel pnlLogo = new JPanel(new BorderLayout(5, 0));
-        btnSelectLogo = new JButton("Select Image...");
+        btnSelectLogo = new JButton("Select College Logo");
         lblLogoStatus = new JLabel("No logo selected");
         lblLogoStatus.setForeground(Color.RED);
-        pnlLogo.add(btnSelectLogo, BorderLayout.WEST);
-        pnlLogo.add(lblLogoStatus, BorderLayout.CENTER);
-
-        gbc.gridx = 1; gbc.gridy = 3; gbc.weightx = 1.0; pnlTop.add(pnlLogo, gbc);
+        pnlTop.add(btnSelectLogo);
+        pnlTop.add(lblLogoStatus);
 
         add(pnlTop, BorderLayout.NORTH);
 
-        // --- CENTER PANEL ---
-        String[] columns = {"Exp No", "Experiment Name", "Date"};
-        tableModel = new DefaultTableModel(columns, 0) {
+        // --- CENTER PANEL (Table) ---
+        tableModel = new DefaultTableModel(new String[]{"ID", "Exp No", "Experiment Title", "Date Added"}, 0) {
             @Override
             public boolean isCellEditable(int row, int column) { return false; }
         };
         table = new JTable(tableModel);
-        JScrollPane scrollPane = new JScrollPane(table);
-        scrollPane.setBorder(BorderFactory.createTitledBorder("Experiments List"));
-        add(scrollPane, BorderLayout.CENTER);
+        table.getColumnModel().getColumn(0).setMinWidth(0);
+        table.getColumnModel().getColumn(0).setMaxWidth(0);
+        table.getColumnModel().getColumn(0).setWidth(0);
+        add(new JScrollPane(table), BorderLayout.CENTER);
 
-        // --- BOTTOM PANEL ---
-        JPanel pnlBottom = new JPanel();
-        btnAddExp = new JButton("Add New Experiment");
-        btnEditExp = new JButton("Edit Experiment");
-        btnDeleteExp = new JButton("Delete Experiment");
+        // --- BOTTOM PANEL (Action Buttons) ---
+        JPanel pnlBottom = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 10));
+
+        btnAddExp = new JButton("Add Manual Exp");
+        btnEditExp = new JButton("Edit Selected");
+        btnDeleteExp = new JButton("Delete Selected");
+        btnImportLocal = new JButton("Import from Local Repo");
         btnGenerate = new JButton("Generate PDF Record");
+
+        btnGenerate.setBackground(new Color(46, 204, 113));
+        btnGenerate.setForeground(Color.BLACK);
 
         pnlBottom.add(btnAddExp);
         pnlBottom.add(btnEditExp);
         pnlBottom.add(btnDeleteExp);
+        pnlBottom.add(btnImportLocal);
         pnlBottom.add(btnGenerate);
+
         add(pnlBottom, BorderLayout.SOUTH);
 
-        // --- LOAD DATA ---
-        loadStudentDetails();
-        loadExperimentsFromDb();
+        // --- INIT DATABASE & LOAD DATA ---
+        initDatabase();
+        loadSettings(); // Auto-populate feature
+        loadDataFromDb();
 
-        // --- LISTENERS ---
-        btnAddExp.addActionListener(e -> openExperimentDialog(null));
-        btnEditExp.addActionListener(e -> editSelectedExperiment());
-        btnDeleteExp.addActionListener(e -> deleteSelectedExperiment());
-
-        btnSelectLogo.addActionListener(e -> {
-            JFileChooser fileChooser = new JFileChooser();
-            fileChooser.setFileFilter(new FileNameExtensionFilter("Images", "png", "jpg", "jpeg"));
-            if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-                logoPath = fileChooser.getSelectedFile().getAbsolutePath();
-                lblLogoStatus.setText("Selected: " + fileChooser.getSelectedFile().getName());
-                lblLogoStatus.setForeground(new Color(0, 100, 0));
-            }
-        });
-
-        btnGenerate.addActionListener(e -> {
-            saveStudentDetails();
-            generatePdfFile();
-        });
-
+        // --- EVENT LISTENERS ---
         addWindowListener(new WindowAdapter() {
             @Override
-            public void windowClosing(WindowEvent e) {
-                saveStudentDetails();
-                super.windowClosing(e);
+            public void windowClosing(WindowEvent windowEvent) { saveSettings(); }
+        });
+
+        FocusAdapter saveOnBlur = new FocusAdapter() {
+            @Override
+            public void focusLost(FocusEvent e) { saveSettings(); }
+        };
+        tfName.addFocusListener(saveOnBlur);
+        tfRegNo.addFocusListener(saveOnBlur);
+        tfYear.addFocusListener(saveOnBlur);
+
+        btnAddExp.addActionListener(e -> openExperimentDialog(null));
+
+        btnEditExp.addActionListener(e -> {
+            int row = table.getSelectedRow();
+            if (row != -1) {
+                int id = (int) tableModel.getValueAt(row, 0);
+                openExperimentDialog(getExperimentById(id));
+            } else {
+                JOptionPane.showMessageDialog(this, "Please select an experiment to edit.");
             }
         });
+
+        btnDeleteExp.addActionListener(e -> {
+            int row = table.getSelectedRow();
+            if (row != -1) {
+                int id = (int) tableModel.getValueAt(row, 0);
+                if(JOptionPane.showConfirmDialog(this, "Are you sure you want to delete this experiment?", "Confirm", JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION) {
+                    deleteExperimentFromDb(id);
+                }
+            } else {
+                JOptionPane.showMessageDialog(this, "Please select an experiment to delete.");
+            }
+        });
+
+        btnImportLocal.addActionListener(e -> {
+            JFileChooser chooser = new JFileChooser();
+            chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+                importFromRepository(chooser.getSelectedFile());
+            }
+        });
+
+        btnSelectLogo.addActionListener(e -> {
+            JFileChooser chooser = new JFileChooser();
+            if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+                logoPath = chooser.getSelectedFile().getAbsolutePath();
+                lblLogoStatus.setText("Logo: " + chooser.getSelectedFile().getName());
+                lblLogoStatus.setForeground(new Color(0, 100, 0));
+                saveSettings();
+            }
+        });
+
+        btnGenerate.addActionListener(e -> generatePdfFile());
     }
 
-    // --- PDF GENERATION LOGIC ---
+    // ==========================================
+    // DATABASE LOGIC (SQLite)
+    // ==========================================
+    private void initDatabase() {
+        try {
+            conn = DriverManager.getConnection("jdbc:sqlite:lab_records.db");
+            Statement stmt = conn.createStatement();
+
+            // Experiments table (updated to support all fields)
+            String sqlExp = "CREATE TABLE IF NOT EXISTS experiments (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                    "exp_no TEXT NOT NULL," +
+                    "title TEXT NOT NULL," +
+                    "date TEXT," +
+                    "aim TEXT," +
+                    "code TEXT," +
+                    "input TEXT," +
+                    "output TEXT," +
+                    "image_path TEXT)";
+            stmt.execute(sqlExp);
+
+            // Settings table for Auto-populate
+            String sqlSettings = "CREATE TABLE IF NOT EXISTS settings (" +
+                    "key_name TEXT PRIMARY KEY, " +
+                    "key_value TEXT)";
+            stmt.execute(sqlSettings);
+
+            // Migrate older databases just in case
+            try { stmt.execute("ALTER TABLE experiments ADD COLUMN input text;"); } catch (SQLException ignore) {}
+            try { stmt.execute("ALTER TABLE experiments ADD COLUMN image_path text;"); } catch (SQLException ignore) {}
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Database connection failed: " + e.getMessage());
+        }
+    }
+
+    private void saveSettings() {
+        if (conn == null) return;
+        String sql = "INSERT OR REPLACE INTO settings (key_name, key_value) VALUES (?, ?)";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            saveSettingRow(pstmt, "student_name", tfName.getText());
+            saveSettingRow(pstmt, "reg_no", tfRegNo.getText());
+            saveSettingRow(pstmt, "year_sem", tfYear.getText());
+            saveSettingRow(pstmt, "logo_path", logoPath);
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void saveSettingRow(PreparedStatement pstmt, String key, String value) throws SQLException {
+        pstmt.setString(1, key);
+        pstmt.setString(2, value);
+        pstmt.executeUpdate();
+    }
+
+    private void loadSettings() {
+        String sql = "SELECT key_name, key_value FROM settings";
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                String key = rs.getString("key_name");
+                String value = rs.getString("key_value");
+                if (value == null) value = "";
+
+                switch (key) {
+                    case "student_name": tfName.setText(value); break;
+                    case "reg_no": tfRegNo.setText(value); break;
+                    case "year_sem": tfYear.setText(value); break;
+                    case "logo_path":
+                        logoPath = value;
+                        if (!logoPath.isEmpty()) {
+                            File f = new File(logoPath);
+                            if(f.exists()) {
+                                lblLogoStatus.setText("Logo: " + f.getName());
+                                lblLogoStatus.setForeground(new Color(0, 100, 0));
+                            }
+                        }
+                        break;
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Could not load settings.");
+        }
+    }
+
+    private void loadDataFromDb() {
+        tableModel.setRowCount(0);
+        try {
+            Statement stmt = conn.createStatement();
+            ResultSet rs = stmt.executeQuery("SELECT id, exp_no, title, date FROM experiments ORDER BY CAST(exp_no AS INTEGER)");
+            while (rs.next()) {
+                tableModel.addRow(new Object[]{
+                        rs.getInt("id"),
+                        rs.getString("exp_no"),
+                        rs.getString("title"),
+                        rs.getString("date")
+                });
+            }
+        } catch (SQLException e) { e.printStackTrace(); }
+    }
+
+    private Experiment getExperimentById(int id) {
+        try {
+            PreparedStatement pstmt = conn.prepareStatement("SELECT * FROM experiments WHERE id = ?");
+            pstmt.setInt(1, id);
+            ResultSet rs = pstmt.executeQuery();
+            if (rs.next()) {
+                return new Experiment(
+                        rs.getInt("id"), rs.getString("exp_no"), rs.getString("title"),
+                        rs.getString("date"), rs.getString("aim"), rs.getString("code"),
+                        rs.getString("input"), rs.getString("output"), rs.getString("image_path")
+                );
+            }
+        } catch (SQLException e) { e.printStackTrace(); }
+        return null;
+    }
+
+    private List<Experiment> getAllExperiments() {
+        List<Experiment> list = new ArrayList<>();
+        try {
+            Statement stmt = conn.createStatement();
+            ResultSet rs = stmt.executeQuery("SELECT * FROM experiments ORDER BY CAST(exp_no AS INTEGER)");
+            while (rs.next()) {
+                list.add(new Experiment(
+                        rs.getInt("id"), rs.getString("exp_no"), rs.getString("title"),
+                        rs.getString("date"), rs.getString("aim"), rs.getString("code"),
+                        rs.getString("input"), rs.getString("output"), rs.getString("image_path")
+                ));
+            }
+        } catch (SQLException e) { e.printStackTrace(); }
+        return list;
+    }
+
+    private void saveExperimentToDb(String expNo, String title, String date, String aim, String code, String in, String out, String imgPath) {
+        String sql = "INSERT INTO experiments(exp_no, title, date, aim, code, input, output, image_path) VALUES(?,?,?,?,?,?,?,?)";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, expNo); pstmt.setString(2, title); pstmt.setString(3, date);
+            pstmt.setString(4, aim); pstmt.setString(5, code); pstmt.setString(6, in);
+            pstmt.setString(7, out); pstmt.setString(8, imgPath);
+            pstmt.executeUpdate();
+            loadDataFromDb();
+        } catch (SQLException e) { e.printStackTrace(); }
+    }
+
+    private void updateExperimentInDb(int id, String expNo, String title, String date, String aim, String code, String in, String out, String imgPath) {
+        String sql = "UPDATE experiments SET exp_no=?, title=?, date=?, aim=?, code=?, input=?, output=?, image_path=? WHERE id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, expNo); pstmt.setString(2, title); pstmt.setString(3, date);
+            pstmt.setString(4, aim); pstmt.setString(5, code); pstmt.setString(6, in);
+            pstmt.setString(7, out); pstmt.setString(8, imgPath); pstmt.setInt(9, id);
+            pstmt.executeUpdate();
+            loadDataFromDb();
+        } catch (SQLException e) { e.printStackTrace(); }
+    }
+
+    private void deleteExperimentFromDb(int id) {
+        String sql = "DELETE FROM experiments WHERE id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, id); pstmt.executeUpdate();
+            loadDataFromDb();
+        } catch (SQLException e) { e.printStackTrace(); }
+    }
+
+
+    // ==========================================
+    // ADD / EDIT DIALOG (GridBagLayout)
+    // ==========================================
+    private void openExperimentDialog(Experiment expToEdit) {
+        boolean isEdit = (expToEdit != null);
+        JDialog dialog = new JDialog(this, isEdit ? "Edit Experiment" : "Add Experiment", true);
+        dialog.setSize(750, 700);
+        dialog.setLayout(new GridBagLayout());
+
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        JTextField dTfNo = new JTextField(10);
+        JTextField dTfName = new JTextField(20);
+        JTextField dTfDate = new JTextField(new SimpleDateFormat("dd/MM/yyyy").format(new Date()));
+        JTextArea dTaAim = new JTextArea(3, 40);
+        JTextArea dTaCode = new JTextArea(10, 40);
+        JTextArea dTaInput = new JTextArea(4, 40);
+        JTextArea dTaOutput = new JTextArea(4, 40);
+
+        JPanel pnlOutputImage = new JPanel(new BorderLayout(5, 0));
+        JButton btnSelectOutputImage = new JButton("Select Image...");
+        JLabel lblOutputImageStatus = new JLabel("No image selected");
+        lblOutputImageStatus.setForeground(Color.RED);
+        pnlOutputImage.add(btnSelectOutputImage, BorderLayout.WEST);
+        pnlOutputImage.add(lblOutputImageStatus, BorderLayout.CENTER);
+
+        final String[] currentOutputImagePath = {null};
+
+        if (isEdit) {
+            dTfNo.setText(expToEdit.no);
+            dTfName.setText(expToEdit.name);
+            dTfDate.setText(expToEdit.date);
+            dTaAim.setText(expToEdit.aim);
+            dTaCode.setText(expToEdit.code);
+            dTaInput.setText(expToEdit.input);
+            dTaOutput.setText(expToEdit.output);
+            currentOutputImagePath[0] = expToEdit.outputImagePath;
+
+            if (currentOutputImagePath[0] != null && !currentOutputImagePath[0].isEmpty()) {
+                File f = new File(currentOutputImagePath[0]);
+                if (f.exists()) {
+                    lblOutputImageStatus.setText("Selected: " + f.getName());
+                    lblOutputImageStatus.setForeground(new Color(0, 100, 0));
+                }
+            }
+        } else {
+            dTfNo.setText(String.valueOf(tableModel.getRowCount() + 1));
+        }
+
+        btnSelectOutputImage.addActionListener(ev -> {
+            JFileChooser fileChooser = new JFileChooser();
+            fileChooser.setFileFilter(new FileNameExtensionFilter("Images", "png", "jpg", "jpeg"));
+            if (fileChooser.showOpenDialog(dialog) == JFileChooser.APPROVE_OPTION) {
+                currentOutputImagePath[0] = fileChooser.getSelectedFile().getAbsolutePath();
+                lblOutputImageStatus.setText("Selected: " + fileChooser.getSelectedFile().getName());
+                lblOutputImageStatus.setForeground(new Color(0, 100, 0));
+            }
+        });
+
+        gbc.gridx = 0; gbc.gridy = 0; dialog.add(new JLabel("Exp No:"), gbc); gbc.gridx = 1; dialog.add(dTfNo, gbc);
+        gbc.gridx = 0; gbc.gridy = 1; dialog.add(new JLabel("Exp Name:"), gbc); gbc.gridx = 1; dialog.add(dTfName, gbc);
+        gbc.gridx = 0; gbc.gridy = 2; dialog.add(new JLabel("Date:"), gbc); gbc.gridx = 1; dialog.add(dTfDate, gbc);
+        gbc.gridx = 0; gbc.gridy = 3; dialog.add(new JLabel("Aim:"), gbc); gbc.gridx = 1; dialog.add(new JScrollPane(dTaAim), gbc);
+        gbc.gridx = 0; gbc.gridy = 4; dialog.add(new JLabel("Code:"), gbc); gbc.gridx = 1; dialog.add(new JScrollPane(dTaCode), gbc);
+        gbc.gridx = 0; gbc.gridy = 5; dialog.add(new JLabel("Input (Optional):"), gbc); gbc.gridx = 1; dialog.add(new JScrollPane(dTaInput), gbc);
+        gbc.gridx = 0; gbc.gridy = 6; dialog.add(new JLabel("Output (Text):"), gbc); gbc.gridx = 1; dialog.add(new JScrollPane(dTaOutput), gbc);
+        gbc.gridx = 0; gbc.gridy = 7; dialog.add(new JLabel("Output (GUI/Image):"), gbc); gbc.gridx = 1; dialog.add(pnlOutputImage, gbc);
+
+        JButton btnSave = new JButton("Save Experiment");
+        gbc.gridx = 1; gbc.gridy = 8;
+        dialog.add(btnSave, gbc);
+
+        btnSave.addActionListener(ev -> {
+            // Sanitize all rich text components prior to pushing them to DB
+            String sanitizedAim = dTaAim.getText().replace("\u00A0", " ").replace("\t", "    ");
+            String sanitizedCode = dTaCode.getText().replace("\u00A0", " ").replace("\t", "    ");
+            String sanitizedInput = dTaInput.getText().replace("\u00A0", " ").replace("\t", "    ");
+            String sanitizedOutput = dTaOutput.getText().replace("\u00A0", " ").replace("\t", "    ");
+
+            if (isEdit) {
+                updateExperimentInDb(expToEdit.id, dTfNo.getText(), dTfName.getText(), dTfDate.getText(), sanitizedAim, sanitizedCode, sanitizedInput, sanitizedOutput, currentOutputImagePath[0]);
+            } else {
+                saveExperimentToDb(dTfNo.getText(), dTfName.getText(), dTfDate.getText(), sanitizedAim, sanitizedCode, sanitizedInput, sanitizedOutput, currentOutputImagePath[0]);
+            }
+            dialog.dispose();
+        });
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+    }
+
+
+    // ==========================================
+    // LOCAL REPOSITORY IMPORT LOGIC
+    // ==========================================
+    public void importFromRepository(File repoDir) {
+        String expName = "Imported Experiment";
+        String expNo = String.valueOf(tableModel.getRowCount() + 1);
+
+        File readmeFile = new File(repoDir, "README.md");
+        if (!readmeFile.exists()) readmeFile = new File(repoDir, "readme.md");
+
+        if (readmeFile.exists()) {
+            try (BufferedReader reader = new BufferedReader(new FileReader(readmeFile))) {
+                String line;
+                Pattern pattern = Pattern.compile("(?i)#\\s*Experiment\\s+(\\d+)[\\s:\\-]*(.*)");
+
+                while ((line = reader.readLine()) != null) {
+                    line = line.trim();
+                    if (line.isEmpty()) continue;
+
+                    Matcher matcher = pattern.matcher(line);
+                    if (matcher.find()) {
+                        expNo = matcher.group(1).trim();
+                        expName = matcher.group(2).trim();
+                        break;
+                    } else if (line.startsWith("# ") && !line.toLowerCase().contains("![review assignment")) {
+                        expName = line.replace("#", "").trim();
+                        break;
+                    }
+                }
+            } catch (Exception e) { e.printStackTrace(); }
+        }
+
+        File autogradingFile = new File(repoDir, ".github/classroom/autograding.json");
+        String input = "", output = "", runCmd = "";
+
+        if (autogradingFile.exists()) {
+            try {
+                String jsonContent = new String(Files.readAllBytes(autogradingFile.toPath()));
+                String[] blocks = jsonContent.split("\\{");
+
+                for (String block : blocks) {
+                    if (block.contains("\"name\"") && block.contains("\"run\"")) {
+                        runCmd = extractJsonValue(block, "run");
+                        input = extractJsonValue(block, "input");
+                        output = extractJsonValue(block, "output");
+                        break;
+                    }
+                }
+            } catch (Exception e) { e.printStackTrace(); }
+        }
+
+        File srcDir = new File(repoDir, "src");
+        String code = "// Could not find 'src' folder or .java files.";
+
+        if (srcDir.exists() && srcDir.isDirectory()) {
+            String className = "";
+            if (runCmd != null && !runCmd.isEmpty()) {
+                String[] parts = runCmd.trim().split(" ");
+                className = parts[parts.length - 1].replace(".java", "").trim();
+                if (className.contains(".")) className = className.substring(className.lastIndexOf(".") + 1);
+            }
+
+            File javaFile = (!className.isEmpty()) ? findJavaFile(srcDir, className) : null;
+            if (javaFile == null) javaFile = findFirstJavaFile(srcDir);
+
+            if (javaFile != null && javaFile.exists()) {
+                try { code = new String(Files.readAllBytes(javaFile.toPath())); }
+                catch (Exception e) { code = "// Error reading Java file."; }
+            } else { code = "// Could not find the main Java file in the src directory."; }
+        }
+
+        String date = new SimpleDateFormat("dd/MM/yyyy").format(new Date());
+        String aim = "To implement " + expName;
+
+        saveExperimentToDb(expNo, expName, date, aim, code, input, output, "");
+        JOptionPane.showMessageDialog(this, "Successfully imported Experiment " + expNo + ": '" + expName + "'!", "Import Success", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private String extractJsonValue(String jsonBlock, String key) {
+        Pattern pattern = Pattern.compile("\"" + key + "\"\\s*:\\s*\"(.*?)\"");
+        Matcher matcher = pattern.matcher(jsonBlock);
+        if (matcher.find()) { return matcher.group(1).replace("\\n", "\n").replace("\\r", "\r"); }
+        return "";
+    }
+
+    private File findJavaFile(File dir, String className) {
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.isDirectory()) {
+                    File found = findJavaFile(file, className);
+                    if (found != null) return found;
+                } else if (file.getName().equals(className + ".java")) return file;
+            }
+        }
+        return null;
+    }
+
+    private File findFirstJavaFile(File dir) {
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.isDirectory()) {
+                    File found = findFirstJavaFile(file);
+                    if (found != null) return found;
+                } else if (file.getName().endsWith(".java")) return file;
+            }
+        }
+        return null;
+    }
+
+    // ==========================================
+    // PDF GENERATION (Aesthetic Upgrade)
+    // ==========================================
     private void generatePdfFile() {
+        if (tfName.getText().isEmpty() || tfRegNo.getText().isEmpty() || tableModel.getRowCount() == 0) {
+            JOptionPane.showMessageDialog(this, "Please fill student details and add at least one experiment.");
+            return;
+        }
+
+        saveSettings();
+        List<Experiment> experiments = getAllExperiments();
+
         // Increased left and right margins to 70
         Document doc = new Document(PageSize.A4, 70, 70, 50, 50);
         String desktopPath = System.getProperty("user.home") + File.separator + "Desktop";
@@ -285,7 +684,7 @@ public class LabRecordGenerator extends JFrame {
 
                 // Separator
                 doc.add(new Paragraph("\n"));
-                doc.add(new com.lowagie.text.pdf.draw.LineSeparator());
+                doc.add(new LineSeparator());
             }
 
             doc.close();
@@ -303,7 +702,7 @@ public class LabRecordGenerator extends JFrame {
 
     private void addSectionHeader(Document doc, String text) throws DocumentException {
         Paragraph p = new Paragraph(text, FontFactory.getFont(FontFactory.HELVETICA_BOLD, 12));
-        p.setSpacingAfter(10f); // Increased spacing after header
+        p.setSpacingAfter(10f);
         doc.add(p);
     }
 
@@ -327,12 +726,12 @@ public class LabRecordGenerator extends JFrame {
         Font fontSm = FontFactory.getFont(FontFactory.HELVETICA, 10);
 
         addCenterText(content, "COLLEGE OF ENGINEERING", fontLg, 5);
-        addCenterText(content, "THIRUVANANTHAPURAM", fontLg, 20); // Reduced Space
+        addCenterText(content, "THIRUVANANTHAPURAM", fontLg, 20);
         addCenterText(content, "DEPARTMENT OF", fontMd, 5);
-        addCenterText(content, "ELECTRICAL ENGINEERING", fontMd, 30); // Reduced Space
-        addCenterText(content, "LABORATORY RECORD", fontLg, 5); // Reduced Space
-        addCenterText(content, "for", fontReg, 5); // Reduced Space
-        addCenterText(content, "PCEOL408 OBJECT ORIENTED PROGRAMMING LAB", fontLg, 30); // Reduced Space
+        addCenterText(content, "ELECTRICAL ENGINEERING", fontMd, 30);
+        addCenterText(content, "LABORATORY RECORD", fontLg, 5);
+        addCenterText(content, "for", fontReg, 5);
+        addCenterText(content, "PCEOL408 OBJECT ORIENTED PROGRAMMING LAB", fontLg, 30);
 
         // LOGO
         if (logoPath != null && !logoPath.isEmpty()) {
@@ -343,42 +742,37 @@ public class LabRecordGenerator extends JFrame {
                 PdfPCell imgCell = new PdfPCell(img);
                 imgCell.setBorder(0);
                 imgCell.setHorizontalAlignment(Element.ALIGN_CENTER);
-                imgCell.setPaddingBottom(20f); // Reduced Space
+                imgCell.setPaddingBottom(20f);
                 content.addCell(imgCell);
             } catch (Exception e) {
                 // Ignore missing logo
             }
         }
 
-        // Student Info Block (Indented like LaTeX \hspace{2cm})
-        // Changed to use relative widths to reduce gap between label and value
         PdfPTable infoTable = new PdfPTable(new float[]{1f, 3f});
         infoTable.setWidthPercentage(80);
-        infoTable.setHorizontalAlignment(Element.ALIGN_CENTER); // Center the block
+        infoTable.setHorizontalAlignment(Element.ALIGN_CENTER);
 
         addInfoRow(infoTable, "Name:", tfName.getText(), fontReg);
         addInfoRow(infoTable, "Reg No:", tfRegNo.getText(), fontReg);
-        addInfoRow(infoTable, "Semester:", "Fourth Semester B.Tech (ECE)", fontReg);
+        addInfoRow(infoTable, "Semester:", "Fourth Semester B.Tech (Electrical and Computer Engineering)", fontReg);
         addInfoRow(infoTable, "Year:", tfYear.getText(), fontReg);
 
         PdfPCell infoContainer = new PdfPCell(infoTable);
         infoContainer.setBorder(0);
-        infoContainer.setPaddingBottom(30f); // Reduced Space
+        infoContainer.setPaddingBottom(30f);
         content.addCell(infoContainer);
 
-        // Modified Certification Statement with increased line spacing
         Paragraph certPara = new Paragraph("Certified that this is the bona fide record of work done by ______________________ in the Object Oriented Programming Lab during the academic year ______________ .", fontSm);
         certPara.setAlignment(Element.ALIGN_CENTER);
-        certPara.setLeading(30f); // Reduced leading to fit on page
+        certPara.setLeading(30f);
 
-        // IMPORTANT: Use Composite Mode (addElement) to respect Paragraph leading
         PdfPCell certCell = new PdfPCell();
         certCell.setBorder(0);
-        certCell.setPaddingBottom(40f); // Reduced Space
+        certCell.setPaddingBottom(40f);
         certCell.addElement(certPara);
         content.addCell(certCell);
 
-        // Signatures (Examiners Left, Faculty Right)
         PdfPTable signTable = new PdfPTable(2);
         signTable.setWidthPercentage(100);
 
@@ -393,7 +787,6 @@ public class LabRecordGenerator extends JFrame {
         signTable.addCell(signLeft);
         signTable.addCell(signRight);
 
-        // Add dates below signatures
         PdfPCell dateLeft = new PdfPCell(new Paragraph("\n\nThiruvananthapuram\nDate: ____________", fontSm));
         dateLeft.setBorder(0);
         dateLeft.setHorizontalAlignment(Element.ALIGN_LEFT);
@@ -408,7 +801,6 @@ public class LabRecordGenerator extends JFrame {
         signContainer.setBorder(0);
         content.addCell(signContainer);
 
-        // Finalize Title Page
         PdfPCell containerCell = new PdfPCell(content);
         containerCell.setBorder(0);
         borderTable.addCell(containerCell);
@@ -442,7 +834,7 @@ public class LabRecordGenerator extends JFrame {
         PdfPCell cell = new PdfPCell(new Phrase(text, FontFactory.getFont(FontFactory.HELVETICA_BOLD, 11)));
         cell.setHorizontalAlignment(Element.ALIGN_CENTER);
         cell.setVerticalAlignment(Element.ALIGN_MIDDLE);
-        cell.setGrayFill(0.9f); // Simple gray background
+        cell.setGrayFill(0.9f);
         cell.setPadding(6);
         table.addCell(cell);
     }
@@ -457,15 +849,13 @@ public class LabRecordGenerator extends JFrame {
 
     // --- HIGHLIGHTED CODE (MATCHING LATEX LISTINGS) ---
     private void addHighlightedCodeBlock(Document doc, String code) throws DocumentException {
-        // Sanitize string mapping non-breaking space / tabs to regular space
         if (code != null) code = code.replace("\u00A0", " ").replace("\t", "    ");
 
         PdfPTable table = new PdfPTable(1);
         table.setWidthPercentage(100);
-        table.setSpacingBefore(5f); // Space above the table
+        table.setSpacingBefore(5f);
 
         Paragraph p = new Paragraph();
-        // Courier Font for code
         Font fontBase = FontFactory.getFont(FontFactory.COURIER, 10, Font.NORMAL, Color.BLACK);
         p.setFont(fontBase);
 
@@ -481,13 +871,10 @@ public class LabRecordGenerator extends JFrame {
             Chunk chunk;
 
             if (match.startsWith("//") || match.startsWith("/*")) {
-                // Comment
                 chunk = new Chunk(match, FontFactory.getFont(FontFactory.COURIER, 10, Font.ITALIC, COL_COMMENT));
             } else if (match.startsWith("\"")) {
-                // String
                 chunk = new Chunk(match, FontFactory.getFont(FontFactory.COURIER, 10, Font.NORMAL, COL_STRING));
             } else {
-                // Keyword
                 chunk = new Chunk(match, FontFactory.getFont(FontFactory.COURIER, 10, Font.BOLD, COL_KEYWORD));
             }
             p.add(chunk);
@@ -499,9 +886,9 @@ public class LabRecordGenerator extends JFrame {
         }
 
         PdfPCell cell = new PdfPCell(p);
-        cell.setBackgroundColor(COL_CODE_BG); // LaTeX 'backcolour'
-        cell.setPadding(10f); // Increased padding
-        cell.setBorderColor(Color.GRAY); // Clearer border
+        cell.setBackgroundColor(COL_CODE_BG);
+        cell.setPadding(10f);
+        cell.setBorderColor(Color.GRAY);
         cell.setBorderWidth(1f);
 
         table.addCell(cell);
@@ -510,20 +897,18 @@ public class LabRecordGenerator extends JFrame {
 
     // --- OUTPUT BLOCK (MATCHING LATEX TCOLORBOX) ---
     private void addOutputBlock(Document doc, String output) throws DocumentException {
-        // Sanitize string mapping non-breaking space / tabs to regular space
         if (output != null) output = output.replace("\u00A0", " ").replace("\t", "    ");
 
         PdfPTable table = new PdfPTable(1);
         table.setWidthPercentage(100);
         table.setSpacingBefore(5f);
 
-        // Output text is usually plain in LaTeX verbatim
         Font outFont = FontFactory.getFont(FontFactory.COURIER, 10, Font.NORMAL, Color.BLACK);
 
         PdfPCell cell = new PdfPCell(new Phrase(output != null ? output : "", outFont));
-        cell.setBackgroundColor(COL_OUTPUT_BG); // Light gray like LaTeX
-        cell.setPadding(10f); // Increased padding
-        cell.setBorderColor(Color.GRAY); // Darker border
+        cell.setBackgroundColor(COL_OUTPUT_BG);
+        cell.setPadding(10f);
+        cell.setBorderColor(Color.GRAY);
         cell.setBorderWidth(1f);
 
         table.addCell(cell);
@@ -547,188 +932,13 @@ public class LabRecordGenerator extends JFrame {
         }
     }
 
-    // --- DATABASE & DATA LOADING ---
-    private void initDatabase() {
-        try (Connection conn = DriverManager.getConnection(DB_URL)) {
-            if (conn != null) {
-                String sql = "CREATE TABLE IF NOT EXISTS experiments (id integer PRIMARY KEY AUTOINCREMENT, no text, name text, date text, aim text, code text, input text, output text);";
-                try (Statement stmt = conn.createStatement()) { stmt.execute(sql); }
-
-                // Migrate older databases by adding the input/outputImagePath columns if they don't exist
-                try (Statement stmt = conn.createStatement()) { stmt.execute("ALTER TABLE experiments ADD COLUMN input text;"); } catch (SQLException ignore) {}
-                try (Statement stmt = conn.createStatement()) { stmt.execute("ALTER TABLE experiments ADD COLUMN outputImagePath text;"); } catch (SQLException ignore) {}
-            }
-        } catch (SQLException e) { e.printStackTrace(); }
-    }
-
-    private void loadExperimentsFromDb() {
-        experiments.clear();
-        tableModel.setRowCount(0);
-        String sql = "SELECT * FROM experiments";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-            while (rs.next()) {
-                String inputVal = null;
-                try { inputVal = rs.getString("input"); } catch (SQLException ignore) {}
-
-                String outputImgVal = null;
-                try { outputImgVal = rs.getString("outputImagePath"); } catch (SQLException ignore) {}
-
-                Experiment exp = new Experiment(rs.getInt("id"), rs.getString("no"), rs.getString("name"), rs.getString("date"), rs.getString("aim"), rs.getString("code"), inputVal, rs.getString("output"), outputImgVal);
-                experiments.add(exp);
-                tableModel.addRow(new Object[]{exp.no, exp.name, exp.date});
-            }
-        } catch (SQLException e) { e.printStackTrace(); }
-    }
-
-    private void saveExperimentToDb(String no, String name, String date, String aim, String code, String input, String output, String outputImagePath) {
-        String sql = "INSERT INTO experiments(no, name, date, aim, code, input, output, outputImagePath) VALUES(?,?,?,?,?,?,?,?)";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, no); pstmt.setString(2, name); pstmt.setString(3, date); pstmt.setString(4, aim); pstmt.setString(5, code); pstmt.setString(6, input); pstmt.setString(7, output); pstmt.setString(8, outputImagePath);
-            pstmt.executeUpdate();
-            loadExperimentsFromDb();
-        } catch (SQLException e) { e.printStackTrace(); }
-    }
-
-    private void updateExperimentInDb(int id, String no, String name, String date, String aim, String code, String input, String output, String outputImagePath) {
-        String sql = "UPDATE experiments SET no=?, name=?, date=?, aim=?, code=?, input=?, output=?, outputImagePath=? WHERE id=?";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, no); pstmt.setString(2, name); pstmt.setString(3, date);
-            pstmt.setString(4, aim); pstmt.setString(5, code); pstmt.setString(6, input); pstmt.setString(7, output); pstmt.setString(8, outputImagePath);
-            pstmt.setInt(9, id);
-            pstmt.executeUpdate();
-            loadExperimentsFromDb();
-        } catch (SQLException e) { e.printStackTrace(); }
-    }
-
-    private void editSelectedExperiment() {
-        int selectedRow = table.getSelectedRow();
-        if (selectedRow >= 0) {
-            Experiment exp = experiments.get(selectedRow);
-            openExperimentDialog(exp);
-        } else {
-            JOptionPane.showMessageDialog(this, "Please select an experiment to edit.");
-        }
-    }
-
-    private void deleteSelectedExperiment() {
-        int selectedRow = table.getSelectedRow();
-        if (selectedRow >= 0) {
-            Experiment exp = experiments.get(selectedRow);
-            String sql = "DELETE FROM experiments WHERE id = ?";
-            try (Connection conn = DriverManager.getConnection(DB_URL);
-                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setInt(1, exp.id); pstmt.executeUpdate();
-                loadExperimentsFromDb();
-            } catch (SQLException e) { e.printStackTrace(); }
-        }
-    }
-
-    private void loadStudentDetails() {
-        Properties props = new Properties();
-        try (FileInputStream in = new FileInputStream(PROP_FILE)) {
-            props.load(in);
-            tfName.setText(props.getProperty("name"));
-            tfRegNo.setText(props.getProperty("regNo"));
-            tfYear.setText(props.getProperty("year"));
-            logoPath = props.getProperty("logoPath", "");
-            if(!logoPath.isEmpty()) {
-                File f = new File(logoPath);
-                if(f.exists()) {
-                    lblLogoStatus.setText("Selected: " + f.getName());
-                    lblLogoStatus.setForeground(new Color(0, 100, 0));
-                }
-            }
-        } catch (IOException e) {
-            tfName.setText("Merlin Mon Mathew"); tfRegNo.setText("TVE25EE001"); tfYear.setText("2025-26");
-        }
-    }
-
-    private void saveStudentDetails() {
-        Properties props = new Properties();
-        props.setProperty("name", tfName.getText());
-        props.setProperty("regNo", tfRegNo.getText());
-        props.setProperty("year", tfYear.getText());
-        if(logoPath != null) props.setProperty("logoPath", logoPath);
-        try (FileOutputStream out = new FileOutputStream(PROP_FILE)) { props.store(out, null); } catch (IOException e) {}
-    }
-
-    private void openExperimentDialog(Experiment expToEdit) {
-        boolean isEdit = (expToEdit != null);
-        JDialog dialog = new JDialog(this, isEdit ? "Edit Experiment" : "Add Experiment", true);
-        dialog.setSize(750, 700); dialog.setLayout(new GridBagLayout()); GridBagConstraints gbc = new GridBagConstraints(); gbc.insets = new Insets(5, 5, 5, 5); gbc.fill = GridBagConstraints.HORIZONTAL;
-        JTextField dTfNo = new JTextField(10); JTextField dTfName = new JTextField(20); JTextField dTfDate = new JTextField(10); JTextArea dTaAim = new JTextArea(3, 40); JTextArea dTaCode = new JTextArea(10, 40); JTextArea dTaInput = new JTextArea(4, 40); JTextArea dTaOutput = new JTextArea(4, 40);
-
-        // Components for Image Selection
-        JPanel pnlOutputImage = new JPanel(new BorderLayout(5, 0));
-        JButton btnSelectOutputImage = new JButton("Select Image...");
-        JLabel lblOutputImageStatus = new JLabel("No image selected");
-        lblOutputImageStatus.setForeground(Color.RED);
-        pnlOutputImage.add(btnSelectOutputImage, BorderLayout.WEST);
-        pnlOutputImage.add(lblOutputImageStatus, BorderLayout.CENTER);
-
-        final String[] currentOutputImagePath = {null};
-
-        if (isEdit) {
-            dTfNo.setText(expToEdit.no);
-            dTfName.setText(expToEdit.name);
-            dTfDate.setText(expToEdit.date);
-            dTaAim.setText(expToEdit.aim);
-            dTaCode.setText(expToEdit.code);
-            dTaInput.setText(expToEdit.input);
-            dTaOutput.setText(expToEdit.output);
-            currentOutputImagePath[0] = expToEdit.outputImagePath;
-
-            if (currentOutputImagePath[0] != null && !currentOutputImagePath[0].isEmpty()) {
-                File f = new File(currentOutputImagePath[0]);
-                if (f.exists()) {
-                    lblOutputImageStatus.setText("Selected: " + f.getName());
-                    lblOutputImageStatus.setForeground(new Color(0, 100, 0));
-                }
-            }
-        }
-
-        btnSelectOutputImage.addActionListener(ev -> {
-            JFileChooser fileChooser = new JFileChooser();
-            fileChooser.setFileFilter(new FileNameExtensionFilter("Images", "png", "jpg", "jpeg"));
-            if (fileChooser.showOpenDialog(dialog) == JFileChooser.APPROVE_OPTION) {
-                currentOutputImagePath[0] = fileChooser.getSelectedFile().getAbsolutePath();
-                lblOutputImageStatus.setText("Selected: " + fileChooser.getSelectedFile().getName());
-                lblOutputImageStatus.setForeground(new Color(0, 100, 0));
-            }
-        });
-
-        gbc.gridx = 0; gbc.gridy = 0; dialog.add(new JLabel("Exp No:"), gbc); gbc.gridx = 1; dialog.add(dTfNo, gbc);
-        gbc.gridx = 0; gbc.gridy = 1; dialog.add(new JLabel("Exp Name:"), gbc); gbc.gridx = 1; dialog.add(dTfName, gbc);
-        gbc.gridx = 0; gbc.gridy = 2; dialog.add(new JLabel("Date:"), gbc); gbc.gridx = 1; dialog.add(dTfDate, gbc);
-        gbc.gridx = 0; gbc.gridy = 3; dialog.add(new JLabel("Aim:"), gbc); gbc.gridx = 1; dialog.add(new JScrollPane(dTaAim), gbc);
-        gbc.gridx = 0; gbc.gridy = 4; dialog.add(new JLabel("Code:"), gbc); gbc.gridx = 1; dialog.add(new JScrollPane(dTaCode), gbc);
-        gbc.gridx = 0; gbc.gridy = 5; dialog.add(new JLabel("Input (Optional):"), gbc); gbc.gridx = 1; dialog.add(new JScrollPane(dTaInput), gbc);
-        gbc.gridx = 0; gbc.gridy = 6; dialog.add(new JLabel("Output (Text):"), gbc); gbc.gridx = 1; dialog.add(new JScrollPane(dTaOutput), gbc);
-        gbc.gridx = 0; gbc.gridy = 7; dialog.add(new JLabel("Output (GUI/Image):"), gbc); gbc.gridx = 1; dialog.add(pnlOutputImage, gbc);
-        JButton btnSave = new JButton("Save"); gbc.gridx = 1; gbc.gridy = 8; dialog.add(btnSave, gbc);
-
-        btnSave.addActionListener(ev -> {
-            // Sanitize all rich text components prior to pushing them to DB
-            String sanitizedAim = dTaAim.getText().replace("\u00A0", " ").replace("\t", "    ");
-            String sanitizedCode = dTaCode.getText().replace("\u00A0", " ").replace("\t", "    ");
-            String sanitizedInput = dTaInput.getText().replace("\u00A0", " ").replace("\t", "    ");
-            String sanitizedOutput = dTaOutput.getText().replace("\u00A0", " ").replace("\t", "    ");
-
-            if (isEdit) {
-                updateExperimentInDb(expToEdit.id, dTfNo.getText(), dTfName.getText(), dTfDate.getText(), sanitizedAim, sanitizedCode, sanitizedInput, sanitizedOutput, currentOutputImagePath[0]);
-            } else {
-                saveExperimentToDb(dTfNo.getText(), dTfName.getText(), dTfDate.getText(), sanitizedAim, sanitizedCode, sanitizedInput, sanitizedOutput, currentOutputImagePath[0]);
-            }
-            dialog.dispose();
-        });
-        dialog.setVisible(true);
-    }
-
+    // ==========================================
+    // MAIN METHOD
+    // ==========================================
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> new LabRecordGenerator().setVisible(true));
+        SwingUtilities.invokeLater(() -> {
+            try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception ignored) {}
+            new LabRecordGenerator().setVisible(true);
+        });
     }
 }
