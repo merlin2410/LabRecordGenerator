@@ -120,7 +120,7 @@ public class LabRecordGenerator extends JFrame {
         btnGenerate = new JButton("Generate PDF Record");
 
         btnGenerate.setBackground(new Color(46, 204, 113));
-        btnGenerate.setForeground(Color.WHITE);
+        btnGenerate.setForeground(Color.BLACK);
 
         pnlBottom.add(btnAddExp);
         pnlBottom.add(btnEditExp);
